@@ -692,10 +692,14 @@ rb_del_running_thread(rb_thread_t *th)
 static void
 thread_sched_set_running(struct rb_thread_sched *sched, rb_thread_t *th)
 {
+    ASSERT_thread_sched_locked(sched, NULL);
     RUBY_DEBUG_LOG("th:%u->th:%u", rb_th_serial(sched->running), rb_th_serial(th));
     VM_ASSERT(sched->running != th);
 
     sched->running = th;
+    // This cancels any deferred scheduling action.
+    sched->deferred_wait_th = NULL;
+    sched->deferred_wait_th_count += 1;
 }
 
 RBIMPL_ATTR_MAYBE_UNUSED()
@@ -1130,6 +1134,37 @@ thread_sched_yield(struct rb_thread_sched *sched, rb_thread_t *th)
 }
 
 static void
+thread_sched_blocking_region_enter(struct rb_thread_sched *sched, rb_thread_t *th) {
+    thread_sched_lock(sched, th);
+    if (sched->is_running) {
+        VM_ASSERT(sched->running == th);
+
+        sched->deferred_wait_th = th;
+        sched->deferred_wait_th_count += 1;
+        rb_native_cond_signal(&sched->deferred_wait_cond);
+    } else {
+        VM_ASSERT(sched->running == NULL);
+        thread_sched_to_waiting_common(sched, th);
+    }
+    thread_sched_unlock(sched, th);
+}
+
+static void
+thread_sched_blocking_region_exit(struct rb_thread_sched *sched, rb_thread_t *th) {
+    thread_sched_lock(sched, th);
+
+    if (sched->running == th && th == sched->deferred_wait_th) {
+        // We never descheduled the thread. Cancel that request now.
+        sched->deferred_wait_th_count += 1;
+        sched->deferred_wait_th = NULL;
+    } else {
+        thread_sched_to_running_common(sched, th);
+    }
+
+    thread_sched_unlock(sched, th);
+}
+
+static void
 transfer_sched_lock(struct rb_thread_sched *sched, struct rb_thread_struct *current, struct rb_thread_struct *th)
 {
     RUBY_DEBUG_LOG("Transferring sched ownership from:%u to th:%u", rb_th_serial(current), rb_th_serial(th));
@@ -1169,9 +1204,9 @@ deferred_wait_thread_worker(void *arg) {
             if (count != sched->deferred_wait_th_count) {
                 continue;
             }
+            VM_ASSERT(sched->is_running);
             VM_ASSERT(th == sched->deferred_wait_th);
-            sched->deferred_wait_th = NULL;
-            sched->deferred_wait_th_count += 1;
+            VM_ASSERT(sched->running == sched->deferred_wait_th);
 
             // Before calling into the scheduler we need to transfer lock ownership (logically) from the worker
             // thread to the target thread.
