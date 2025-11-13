@@ -75,6 +75,10 @@ static const void *const condattr_monotonic = NULL;
 // #define HAVE_SYS_EPOLL_H 0
 #endif
 
+#if !defined(SET_CURRENT_THREAD_NAME) && defined(__linux__) && defined(PR_SET_NAME)
+# define SET_CURRENT_THREAD_NAME(name) prctl(PR_SET_NAME, name)
+#endif
+
 #ifndef USE_MN_THREADS
   #if defined(__EMSCRIPTEN__) || defined(COROUTINE_PTHREAD_CONTEXT)
     // on __EMSCRIPTEN__ provides epoll* declarations, but no implementations.
@@ -1134,7 +1138,8 @@ thread_sched_yield(struct rb_thread_sched *sched, rb_thread_t *th)
 }
 
 static void
-thread_sched_blocking_region_enter(struct rb_thread_sched *sched, rb_thread_t *th) {
+thread_sched_blocking_region_enter(struct rb_thread_sched *sched, rb_thread_t *th)
+{
     thread_sched_lock(sched, th);
     if (sched->is_running) {
         VM_ASSERT(sched->running == th);
@@ -1150,7 +1155,8 @@ thread_sched_blocking_region_enter(struct rb_thread_sched *sched, rb_thread_t *t
 }
 
 static void
-thread_sched_blocking_region_exit(struct rb_thread_sched *sched, rb_thread_t *th) {
+thread_sched_blocking_region_exit(struct rb_thread_sched *sched, rb_thread_t *th)
+{
     thread_sched_lock(sched, th);
 
     if (sched->running == th && th == sched->deferred_wait_th) {
@@ -1175,7 +1181,11 @@ transfer_sched_lock(struct rb_thread_sched *sched, struct rb_thread_struct *curr
 }
 
 static void *
-deferred_wait_thread_worker(void *arg) {
+deferred_wait_thread_worker(void *arg)
+{
+#ifdef SET_CURRENT_THREAD_NAME
+    SET_CURRENT_THREAD_NAME("rb_def_wait");
+#endif
     struct rb_thread_sched *sched = (struct rb_thread_sched *) arg;
     struct rb_thread_struct *lock_owner = sched->deferred_wait_th_dummy;
 
@@ -1221,7 +1231,9 @@ deferred_wait_thread_worker(void *arg) {
     return NULL;
 }
 
-static void start_deferred_wait_thread(struct rb_thread_sched *sched) {
+static void
+start_deferred_wait_thread(struct rb_thread_sched *sched)
+{
     pthread_attr_t attr;
     int r;
     r = pthread_attr_init(&attr);
@@ -1233,7 +1245,6 @@ static void start_deferred_wait_thread(struct rb_thread_sched *sched) {
         rb_bug_errno("start_deferred_wait_thread - pthread_create", r);
     }
     pthread_attr_destroy(&attr);
-    pthread_setname_np(sched->deferred_wait_pthread, "rb_def_wait");
 }
 
 void
@@ -1619,21 +1630,30 @@ rb_ractor_sched_barrier_join(rb_vm_t *vm, rb_ractor_t *cr)
 // TODO
 
 static void clear_thread_cache_altstack(void);
+#endif
 
-static void
+void
 rb_thread_sched_destroy(struct rb_thread_sched *sched)
 {
+    // Stop the deferred wait worker
+    rb_native_mutex_lock(&sched->lock_);
+
+    sched->stop = true;
+    rb_native_cond_signal(&sched->deferred_wait_cond);
+    rb_native_mutex_unlock(&sched->lock_);
+
+    pthread_join(sched->deferred_wait_pthread, NULL);
+
     /*
-     * only called once at VM shutdown (not atfork), another thread
+     * only called once at VM/ractor shutdown (not atfork), another thread
      * may still grab vm->gvl.lock when calling gvl_release at
      * the end of thread_start_func_2
      */
-    if (0) {
-        rb_native_mutex_destroy(&sched->lock);
-    }
-    clear_thread_cache_altstack();
+    rb_native_mutex_destroy(&sched->lock_);
+    rb_native_cond_destroy(&sched->deferred_wait_cond);
+
+    //clear_thread_cache_altstack();
 }
-#endif
 
 #ifdef RB_THREAD_T_HAS_NATIVE_ID
 static int
@@ -1665,7 +1685,6 @@ thread_sched_atfork(struct rb_thread_sched *sched)
     vm->ractor.sched.running_cnt = 0;
 
     rb_native_mutex_initialize(&vm->ractor.sched.lock);
-    // rb_native_cond_destroy(&vm->ractor.sched.cond);
     rb_native_cond_initialize(&vm->ractor.sched.cond);
     rb_native_cond_initialize(&vm->ractor.sched.barrier_complete_cond);
     rb_native_cond_initialize(&vm->ractor.sched.barrier_release_cond);
@@ -2774,10 +2793,6 @@ setup_communication_pipe_internal(int pipes[2])
     set_nonblock(pipes[0]);
     set_nonblock(pipes[1]);
 }
-
-#if !defined(SET_CURRENT_THREAD_NAME) && defined(__linux__) && defined(PR_SET_NAME)
-# define SET_CURRENT_THREAD_NAME(name) prctl(PR_SET_NAME, name)
-#endif
 
 enum {
     THREAD_NAME_MAX =
