@@ -1197,7 +1197,7 @@ transfer_sched_lock(struct rb_thread_sched *sched, struct rb_thread_struct *curr
 }
 
 static void *
-deferred_wait_thread_worker(void *)
+deferred_wait_thread_worker(void *arg)
 {
 #ifdef SET_CURRENT_THREAD_NAME
     SET_CURRENT_THREAD_NAME("rb_def_wait");
@@ -1219,15 +1219,18 @@ deferred_wait_thread_worker(void *)
                         VM_ASSERT(sched->deferred_wait_th == NULL);
                         transfer_sched_lock(sched, th, NULL);
                         ccan_list_del_init(&sched->deferred_wait_link);
-                    } else {
+                    }
+                    else {
                         sched->deferred_wait_seq2 = sched->deferred_wait_seq1;
                         should_sleep = true;
                     }
-                } else {
+                }
+                else {
                     ccan_list_del_init(&sched->deferred_wait_link);
                 }
                 rb_native_mutex_unlock(&sched->lock_);
-            } else {
+            }
+            else {
                 should_sleep = true;
             }
         }
@@ -1235,7 +1238,8 @@ deferred_wait_thread_worker(void *)
             rb_native_mutex_unlock(&thread_deferred_wait.lock);
             usleep(50);
             rb_native_mutex_lock(&thread_deferred_wait.lock);
-        } else {
+        }
+        else {
             if (thread_deferred_wait.stop) {
                 break;
             }
@@ -1293,7 +1297,8 @@ thread_sched_blocking_region_enter(struct rb_thread_sched *sched, rb_thread_t *t
     if (sched->is_running) {
         VM_ASSERT(sched->running == th);
         deferred_wait_thread_enqueue_yield(sched, th);
-    } else {
+    }
+    else {
         VM_ASSERT(sched->running == NULL);
         thread_sched_to_waiting_common(sched, th);
     }
@@ -1307,7 +1312,8 @@ thread_sched_blocking_region_exit(struct rb_thread_sched *sched, rb_thread_t *th
     if (sched->running == th && th == sched->deferred_wait_th) {
         // We never descheduled the thread. Cancel that request now.
         deferred_wait_thread_cancel_yield(sched);
-    } else {
+    }
+    else {
         thread_sched_to_running_common(sched, th);
     }
     thread_sched_unlock(sched, th);
@@ -1318,6 +1324,7 @@ rb_thread_start_deferred_wait_thread(bool init)
 {
     if (init) {
         thread_deferred_wait.stop = false;
+        rb_native_mutex_initialize(&thread_deferred_wait.lock);
         rb_native_cond_initialize(&thread_deferred_wait.cond);
         ccan_list_head_init(&thread_deferred_wait.q_head);
     }
