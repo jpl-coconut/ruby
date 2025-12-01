@@ -1264,9 +1264,15 @@ deferred_wait_thread_detach_sched(struct rb_thread_sched *sched)
     }
 }
 
-static void
+static bool
 deferred_wait_thread_enqueue_yield(struct rb_thread_sched *sched, rb_thread_t *th)
 {
+    if (!sched->is_running) {
+        return false;
+    }
+
+    VM_ASSERT(sched->running == th);
+
     sched->deferred_wait_th = th;
     sched->deferred_wait_seq1 += 1;
 
@@ -1275,10 +1281,16 @@ deferred_wait_thread_enqueue_yield(struct rb_thread_sched *sched, rb_thread_t *t
         rb_native_mutex_lock(&thread_deferred_wait.lock);
         // We held the sched lock while waiting for the mutex so we should not have been unlinked.
         VM_ASSERT(!ccan_node_linked(&sched->deferred_wait_link));
+        if (thread_deferred_wait.stop) {
+            // Deferred waiter is stopped. Fall back.
+            rb_native_mutex_unlock(&thread_deferred_wait.lock);
+            return false;
+        }
         ccan_list_add(&thread_deferred_wait.q_head, &sched->deferred_wait_link);
         rb_native_cond_signal(&thread_deferred_wait.cond);
         rb_native_mutex_unlock(&thread_deferred_wait.lock);
     }
+    return true;
 }
 
 static void
@@ -1294,12 +1306,8 @@ static void
 thread_sched_blocking_region_enter(struct rb_thread_sched *sched, rb_thread_t *th)
 {
     thread_sched_lock(sched, th);
-    if (sched->is_running) {
-        VM_ASSERT(sched->running == th);
-        deferred_wait_thread_enqueue_yield(sched, th);
-    }
-    else {
-        VM_ASSERT(sched->running == NULL);
+    if (!deferred_wait_thread_enqueue_yield(sched, th)) {
+        // If we couldn't defer, then transition to waiting immediately.
         thread_sched_to_waiting_common(sched, th);
     }
     thread_sched_unlock(sched, th);
