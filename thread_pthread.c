@@ -120,6 +120,17 @@ static struct {
     struct ccan_list_head q_head;
 } thread_deferred_wait;
 
+char *dump_log_base = NULL;
+char *dump_log = NULL;
+
+#include <unistd.h>
+
+#define DUMP_LOG_REPORT(...)                        \
+    {char tmp[1000];                        \
+    sprintf(tmp, __VA_ARGS__);                        \
+    dump_log += sprintf(dump_log, "%x.%lx %s", (int) getpid(), (long) pthread_self(), tmp);                        \
+    }
+
 // native thread wrappers
 
 #define NATIVE_MUTEX_LOCK_DEBUG 0
@@ -141,12 +152,21 @@ mutex_debug(const char *msg, void *lock)
 void
 rb_native_mutex_lock(pthread_mutex_t *lock)
 {
+    if (dump_log) {
+        DUMP_LOG_REPORT("mutex_lock: %lx\n", (unsigned long) lock);
+    }
+
     int r;
 #if NATIVE_MUTEX_LOCK_DEBUG_YIELD
     native_thread_yield();
 #endif
     mutex_debug("lock", lock);
     if ((r = pthread_mutex_lock(lock)) != 0) {
+
+        if (dump_log) {
+            fprintf(stderr, "%s", dump_log_base);
+        }
+
         rb_bug_errno("pthread_mutex_lock", r);
     }
 }
@@ -154,6 +174,10 @@ rb_native_mutex_lock(pthread_mutex_t *lock)
 void
 rb_native_mutex_unlock(pthread_mutex_t *lock)
 {
+    if (dump_log) {
+        DUMP_LOG_REPORT("mutex_unlock: %lx\n", (unsigned long) lock);
+    }
+
     int r;
     mutex_debug("unlock", lock);
     if ((r = pthread_mutex_unlock(lock)) != 0) {
@@ -168,11 +192,17 @@ rb_native_mutex_trylock(pthread_mutex_t *lock)
     mutex_debug("trylock", lock);
     if ((r = pthread_mutex_trylock(lock)) != 0) {
         if (r == EBUSY) {
+            if (dump_log) {
+                DUMP_LOG_REPORT("mutex_trylock_fail: %lx\n", (unsigned long) lock);
+            }
             return EBUSY;
         }
         else {
             rb_bug_errno("pthread_mutex_trylock", r);
         }
+    }
+    if (dump_log) {
+        DUMP_LOG_REPORT("mutex_trylock_success: %lx\n", (unsigned long) lock);
     }
     return 0;
 }
@@ -180,6 +210,11 @@ rb_native_mutex_trylock(pthread_mutex_t *lock)
 void
 rb_native_mutex_initialize(pthread_mutex_t *lock)
 {
+    if (!dump_log) {
+        dump_log = dump_log_base = (char *) malloc(1000000000);
+    }
+    DUMP_LOG_REPORT("mutex_init: %lx\n", (unsigned long) lock);
+
     int r = pthread_mutex_init(lock, 0);
     mutex_debug("init", lock);
     if (r != 0) {
@@ -190,6 +225,10 @@ rb_native_mutex_initialize(pthread_mutex_t *lock)
 void
 rb_native_mutex_destroy(pthread_mutex_t *lock)
 {
+    if (dump_log) {
+        DUMP_LOG_REPORT("mutex_destroy: %lx\n", (unsigned long) lock);
+    }
+
     int r = pthread_mutex_destroy(lock);
     mutex_debug("destroy", lock);
     if (r != 0) {
@@ -424,6 +463,10 @@ thread_sched_set_unlocked(struct rb_thread_sched *sched, rb_thread_t *th)
 static void
 thread_sched_lock_(struct rb_thread_sched *sched, rb_thread_t *th, const char *file, int line)
 {
+    if (dump_log) {
+        DUMP_LOG_REPORT("thread_sched_lock_. sched: %lx    lock: %lx\n", (unsigned long) sched, (unsigned long) &sched->lock_);
+    }
+
     rb_native_mutex_lock(&sched->lock_);
 
 #if VM_CHECK_MODE
@@ -438,6 +481,10 @@ thread_sched_lock_(struct rb_thread_sched *sched, rb_thread_t *th, const char *f
 static void
 thread_sched_unlock_(struct rb_thread_sched *sched, rb_thread_t *th, const char *file, int line)
 {
+    if (dump_log) {
+        DUMP_LOG_REPORT("thread_sched_unlock_. sched: %lx    lock: %lx\n", (unsigned long) sched, (unsigned long) &sched->lock_);
+    }
+
     RUBY_DEBUG_LOG2(file, line, "th:%u", rb_th_serial(th));
 
     thread_sched_set_unlocked(sched, th);
@@ -1255,12 +1302,21 @@ deferred_wait_thread_worker(void *arg)
 static void
 deferred_wait_thread_detach_sched(struct rb_thread_sched *sched)
 {
+
     // Only unlink if we're actually linked.
     if (ccan_node_linked(&sched->deferred_wait_link)) {
+        if (dump_log) {
+            DUMP_LOG_REPORT("thread_sched_detach_real. sched: %lx    lock: %lx\n", (unsigned long) sched, (unsigned long) &sched->lock_);
+        }
+
         rb_native_mutex_lock(&thread_deferred_wait.lock);
         VM_ASSERT(ccan_node_linked(&sched->deferred_wait_link));
         ccan_list_del_init(&sched->deferred_wait_link);
         rb_native_mutex_unlock(&thread_deferred_wait.lock);
+    } else {
+        if (dump_log) {
+            DUMP_LOG_REPORT("thread_sched_detach_bypass. sched: %lx    lock: %lx\n", (unsigned long) sched, (unsigned long) &sched->lock_);
+        }
     }
 }
 
@@ -1305,10 +1361,21 @@ deferred_wait_thread_cancel_yield(struct rb_thread_sched *sched)
 static void
 thread_sched_blocking_region_enter(struct rb_thread_sched *sched, rb_thread_t *th)
 {
+    if (dump_log) {
+        DUMP_LOG_REPORT("thread_sched_enqueue_try. sched: %lx    lock: %lx\n", (unsigned long) sched, (unsigned long) &sched->lock_);
+    }
+
     thread_sched_lock(sched, th);
     if (!deferred_wait_thread_enqueue_yield(sched, th)) {
+        if (dump_log) {
+            DUMP_LOG_REPORT("thread_sched_enqueue_fail. sched: %lx    lock: %lx\n", (unsigned long) sched, (unsigned long) &sched->lock_);
+        }
         // If we couldn't defer, then transition to waiting immediately.
         thread_sched_to_waiting_common(sched, th);
+    } else {
+        if (dump_log) {
+            DUMP_LOG_REPORT("thread_sched_enqueue_success. sched: %lx    lock: %lx\n", (unsigned long) sched, (unsigned long) &sched->lock_);
+        }
     }
     thread_sched_unlock(sched, th);
 }
@@ -1316,12 +1383,22 @@ thread_sched_blocking_region_enter(struct rb_thread_sched *sched, rb_thread_t *t
 static void
 thread_sched_blocking_region_exit(struct rb_thread_sched *sched, rb_thread_t *th)
 {
+    if (dump_log) {
+        DUMP_LOG_REPORT("thread_sched_blocking_region_exit. sched: %lx    lock: %lx\n", (unsigned long) sched, (unsigned long) &sched->lock_);
+    }
+
     thread_sched_lock(sched, th);
     if (sched->running == th && th == sched->deferred_wait_th) {
+        if (dump_log) {
+            DUMP_LOG_REPORT("thread_sched_blocking_region_exit/cancel. sched: %lx    lock: %lx\n", (unsigned long) sched, (unsigned long) &sched->lock_);
+        }
         // We never descheduled the thread. Cancel that request now.
         deferred_wait_thread_cancel_yield(sched);
     }
     else {
+        if (dump_log) {
+            DUMP_LOG_REPORT("thread_sched_blocking_region_exit/wait. sched: %lx    lock: %lx\n", (unsigned long) sched, (unsigned long) &sched->lock_);
+        }
         thread_sched_to_running_common(sched, th);
     }
     thread_sched_unlock(sched, th);
@@ -1330,6 +1407,10 @@ thread_sched_blocking_region_exit(struct rb_thread_sched *sched, rb_thread_t *th
 void
 rb_thread_start_deferred_wait_thread(void)
 {
+    if (dump_log) {
+        DUMP_LOG_REPORT("rb_thread_start_deferred_wait_thread. lock: %lx\n", (unsigned long) &thread_deferred_wait.lock);
+    }
+
     rb_native_mutex_initialize(&thread_deferred_wait.lock);
     rb_native_cond_initialize(&thread_deferred_wait.cond);
     ccan_list_head_init(&thread_deferred_wait.q_head);
@@ -1345,11 +1426,19 @@ rb_thread_start_deferred_wait_thread(void)
         rb_bug_errno("start_deferred_wait_thread - pthread_create", r);
     }
     pthread_attr_destroy(&attr);
+
+    if (dump_log) {
+        DUMP_LOG_REPORT("rb_thread_start_deferred_wait_thread/complete. lock: %lx\n", (unsigned long) &thread_deferred_wait.lock);
+    }
 }
 
 void
 rb_thread_stop_deferred_wait_thread(void)
 {
+    if (dump_log) {
+        DUMP_LOG_REPORT("rb_thread_stop_deferred_wait_thread. lock: %lx\n", (unsigned long) &thread_deferred_wait.lock);
+    }
+
     rb_native_mutex_lock(&thread_deferred_wait.lock);
     thread_deferred_wait.running = false;
     rb_native_cond_signal(&thread_deferred_wait.cond);
@@ -1358,12 +1447,20 @@ rb_thread_stop_deferred_wait_thread(void)
     VM_ASSERT(ccan_list_empty(&thread_deferred_wait.q_head));
     rb_native_cond_destroy(&thread_deferred_wait.cond);
     rb_native_mutex_destroy(&thread_deferred_wait.lock);
+
+    if (dump_log) {
+        DUMP_LOG_REPORT("rb_thread_stop_deferred_wait_thread/complete. lock: %lx\n", (unsigned long) &thread_deferred_wait.lock);
+    }
 }
 
 
 void
 rb_thread_sched_init(struct rb_thread_sched *sched, bool atfork)
 {
+    if (dump_log) {
+        DUMP_LOG_REPORT("thread_sched_init. sched: %lx    lock: %lx\n", (unsigned long) sched, (unsigned long) &sched->lock_);
+    }
+
     rb_native_mutex_initialize(&sched->lock_);
 
 #if VM_CHECK_MODE
@@ -1756,6 +1853,10 @@ static void clear_thread_cache_altstack(void);
 void
 rb_thread_sched_destroy(struct rb_thread_sched *sched)
 {
+    if (dump_log) {
+        DUMP_LOG_REPORT("thread_sched_destroy. sched: %lx    lock: %lx\n", (unsigned long) sched, (unsigned long) &sched->lock_);
+    }
+
     deferred_wait_thread_detach_sched(sched);
 
     /*
