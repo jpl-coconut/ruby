@@ -102,7 +102,7 @@ static const void *const condattr_monotonic = NULL;
 
 // process-global: deferred thread waiter
 static struct {
-    bool stop;
+    bool running;
     pthread_t thread;
 
     // Do not wait for any other lock while holding this one. The scheduler lock
@@ -1240,7 +1240,7 @@ deferred_wait_thread_worker(void *arg)
             rb_native_mutex_lock(&thread_deferred_wait.lock);
         }
         else {
-            if (thread_deferred_wait.stop) {
+            if (!thread_deferred_wait.running) {
                 break;
             }
             VM_ASSERT(ccan_list_empty(&thread_deferred_wait.q_head));
@@ -1281,7 +1281,7 @@ deferred_wait_thread_enqueue_yield(struct rb_thread_sched *sched, rb_thread_t *t
         rb_native_mutex_lock(&thread_deferred_wait.lock);
         // We held the sched lock while waiting for the mutex so we should not have been unlinked.
         VM_ASSERT(!ccan_node_linked(&sched->deferred_wait_link));
-        if (thread_deferred_wait.stop) {
+        if (!thread_deferred_wait.running) {
             // Deferred waiter is stopped. Fall back.
             rb_native_mutex_unlock(&thread_deferred_wait.lock);
             return false;
@@ -1331,7 +1331,6 @@ void
 rb_thread_start_deferred_wait_thread(bool init)
 {
     if (init) {
-        thread_deferred_wait.stop = false;
         rb_native_mutex_initialize(&thread_deferred_wait.lock);
         rb_native_cond_initialize(&thread_deferred_wait.cond);
         ccan_list_head_init(&thread_deferred_wait.q_head);
@@ -1348,13 +1347,14 @@ rb_thread_start_deferred_wait_thread(bool init)
         rb_bug_errno("start_deferred_wait_thread - pthread_create", r);
     }
     pthread_attr_destroy(&attr);
+    thread_deferred_wait.running = true;
 }
 
 void
 rb_thread_stop_deferred_wait_thread(bool destroy)
 {
     rb_native_mutex_lock(&thread_deferred_wait.lock);
-    thread_deferred_wait.stop = true;
+    thread_deferred_wait.running = false;
     rb_native_cond_signal(&thread_deferred_wait.cond);
     rb_native_mutex_unlock(&thread_deferred_wait.lock);
     pthread_join(thread_deferred_wait.thread, NULL);
