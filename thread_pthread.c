@@ -1328,14 +1328,12 @@ thread_sched_blocking_region_exit(struct rb_thread_sched *sched, rb_thread_t *th
 }
 
 void
-rb_thread_start_deferred_wait_thread(bool init)
+rb_thread_start_deferred_wait_thread(void)
 {
-    if (init) {
-        rb_native_mutex_initialize(&thread_deferred_wait.lock);
-        rb_native_cond_initialize(&thread_deferred_wait.cond);
-        ccan_list_head_init(&thread_deferred_wait.q_head);
-    }
-
+    rb_native_mutex_initialize(&thread_deferred_wait.lock);
+    rb_native_cond_initialize(&thread_deferred_wait.cond);
+    ccan_list_head_init(&thread_deferred_wait.q_head);
+    thread_deferred_wait.running = true;
     pthread_attr_t attr;
     int r;
     r = pthread_attr_init(&attr);
@@ -1347,23 +1345,19 @@ rb_thread_start_deferred_wait_thread(bool init)
         rb_bug_errno("start_deferred_wait_thread - pthread_create", r);
     }
     pthread_attr_destroy(&attr);
-    thread_deferred_wait.running = true;
 }
 
 void
-rb_thread_stop_deferred_wait_thread(bool destroy)
+rb_thread_stop_deferred_wait_thread(void)
 {
     rb_native_mutex_lock(&thread_deferred_wait.lock);
     thread_deferred_wait.running = false;
     rb_native_cond_signal(&thread_deferred_wait.cond);
     rb_native_mutex_unlock(&thread_deferred_wait.lock);
     pthread_join(thread_deferred_wait.thread, NULL);
-
-    if (destroy) {
-        VM_ASSERT(ccan_list_empty(&thread_deferred_wait.q_head));
-        rb_native_cond_destroy(&thread_deferred_wait.cond);
-        rb_native_mutex_destroy(&thread_deferred_wait.lock);
-    }
+    VM_ASSERT(ccan_list_empty(&thread_deferred_wait.q_head));
+    rb_native_cond_destroy(&thread_deferred_wait.cond);
+    rb_native_mutex_destroy(&thread_deferred_wait.lock);
 }
 
 
@@ -1795,7 +1789,7 @@ thread_sched_atfork(struct rb_thread_sched *sched)
 {
     current_fork_gen++;
     rb_thread_sched_init(sched, true);
-    rb_thread_start_deferred_wait_thread(true);
+    rb_thread_start_deferred_wait_thread();
     rb_thread_t *th =  GET_THREAD();
     rb_vm_t *vm = GET_VM();
 
