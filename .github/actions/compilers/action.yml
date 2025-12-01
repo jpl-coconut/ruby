@@ -30,7 +30,7 @@ inputs:
     # to optimize binaries.  Also GitHub Actions run on relatively modern CPUs
     # compared to, say, GCC 4 or Clang 3.  We don't specify `-march=native`
     # because compilers tend not understand what the CPU is.
-    default: '-O1'
+    default: '-O0 -fno-omit-frame-pointer -fno-optimize-sibling-calls'
     description: >-
       Compiler flags for optimisations.
 
