@@ -122,11 +122,67 @@ static struct {
 
 #include <unistd.h>
 
+#define LOG_TAIL_SIZE 100000000
+char LOG_TAIL[LOG_TAIL_SIZE+1] = "";
+char *LOG_TAIL_HEAD = LOG_TAIL;
+bool write_tail = false;
+const char *LOG_TAIL_END = LOG_TAIL + LOG_TAIL_SIZE;
+
+static void log_tail_append(const char *msg) {
+    char tmp[1000];
+    sprintf(tmp, "RDB: %x.%lx %s", (int) getpid(), (long) pthread_self(), msg);
+    unsigned long s_remaining = strlen(tmp);
+    unsigned long b_remaining = LOG_TAIL_END - LOG_TAIL_HEAD;
+    if (s_remaining > b_remaining) {
+        memset(LOG_TAIL_HEAD, 0, b_remaining);
+        LOG_TAIL_HEAD = LOG_TAIL;
+    }
+    memcpy(LOG_TAIL_HEAD, tmp, s_remaining);
+    LOG_TAIL_HEAD += s_remaining;
+}
+
+static void log_tail_dump() {
+    if (write_tail) {
+        LOG_TAIL[LOG_TAIL_SIZE] = 0;
+        fprintf(stderr, "%s", LOG_TAIL_HEAD);
+    }
+    if (LOG_TAIL_HEAD > LOG_TAIL) {
+        *LOG_TAIL_HEAD = 0;
+        fprintf(stderr, "%s", LOG_TAIL);
+    }
+}
+
+static struct sigaction old_sa;
+static void tail_segv_handler(int signum, siginfo_t *info, void *context) {
+    log_tail_dump();
+    sigaction(SIGSEGV, &old_sa, NULL);
+    raise(SIGSEGV);
+}
+
+static void install_segv_handler() {
+    static bool installed = false;
+    if (installed) {
+        return;
+    }
+
+    struct sigaction sa;
+
+    // Initialize the new sigaction structure
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_sigaction = tail_segv_handler;
+    sa.sa_flags = SA_SIGINFO; // Use sa_sigaction for handler, provides more info
+    if (sigaction(SIGSEGV, &sa, &old_sa) == -1) {
+        abort();
+    }
+    installed = true;
+}
+
+
 #define DUMP_LOG_REPORT(...)                        \
     {char tmp[1000];                        \
     sprintf(tmp, __VA_ARGS__);                        \
-    fprintf(stderr, "RDB: %x.%lx %s", (int) getpid(), (long) pthread_self(), tmp);                        \
-    }
+    log_tail_append(tmp); \
+}
 
 // native thread wrappers
 
@@ -149,7 +205,6 @@ mutex_debug(const char *msg, void *lock)
 void
 rb_native_mutex_lock(pthread_mutex_t *lock)
 {
-
     DUMP_LOG_REPORT("mutex_lock/enter: %lx\n", (unsigned long) lock);
 
     int r;
@@ -1249,6 +1304,10 @@ deferred_wait_thread_worker(void *arg)
 #ifdef SET_CURRENT_THREAD_NAME
     SET_CURRENT_THREAD_NAME("rb_def_wait");
 #endif
+    usleep(1500000);
+    install_segv_handler();
+
+
     DUMP_LOG_REPORT("thread start: %lx\n", (unsigned long) &thread_deferred_wait.lock);
 
     rb_native_mutex_lock(&thread_deferred_wait.lock);
@@ -1405,7 +1464,6 @@ thread_sched_blocking_region_exit(struct rb_thread_sched *sched, rb_thread_t *th
 void
 rb_thread_start_deferred_wait_thread(void)
 {
-
     DUMP_LOG_REPORT("rb_thread_start_deferred_wait_thread. lock: %lx\n", (unsigned long) &thread_deferred_wait.lock);
 
     rb_native_mutex_initialize(&thread_deferred_wait.lock);
