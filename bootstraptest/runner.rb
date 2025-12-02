@@ -597,7 +597,7 @@ class Assertion < Struct.new(:src, :path, :lineno, :proc)
       $stderr.print BT.reset
       $stderr.puts if BT.verbose
       show_error faildesc, message
-      unless errout.empty?
+      unless errout.gsub(/RDB: .*?\n/,'').empty?
         $stderr.print "#{BT.failed}stderr output is not empty#{BT.reset}\n", adjust_indent(errout)
       end
 
@@ -637,7 +637,7 @@ class Assertion < Struct.new(:src, :path, :lineno, :proc)
         pid = out.pid
         th = Thread.new {out.read.tap {Process.waitpid(pid); out.close}}
         if th.join(timeout)
-          th.value
+          th.value.gsub(/RDB: .*?\n/,'')
         else
           Timeout.new("timed out after #{timeout} seconds")
         end
@@ -651,7 +651,7 @@ class Assertion < Struct.new(:src, :path, :lineno, :proc)
         end
       end
     else
-      eval(src).to_s
+      eval(src).to_s.gsub(/RDB: .*?\n/,'')
     end
   end
 
