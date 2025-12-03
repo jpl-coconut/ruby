@@ -154,6 +154,7 @@ static void log_tail_dump() {
 
 static struct sigaction old_sa;
 static void tail_segv_handler(int signum, siginfo_t *info, void *context) {
+    DUMP_LOG_REPORT("SEGV: dumping");
     log_tail_dump();
     sigaction(SIGSEGV, &old_sa, NULL);
     raise(SIGSEGV);
