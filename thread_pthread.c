@@ -123,10 +123,10 @@ static struct {
 #include <unistd.h>
 
 #define LOG_TAIL_SIZE 100000000
-char LOG_TAIL[LOG_TAIL_SIZE+1] = "";
-char *LOG_TAIL_HEAD = LOG_TAIL;
-bool write_tail = false;
-const char *LOG_TAIL_END = LOG_TAIL + LOG_TAIL_SIZE;
+static char LOG_TAIL[LOG_TAIL_SIZE+1] = "";
+static char *LOG_TAIL_HEAD = LOG_TAIL;
+static bool write_tail = false;
+static const char *LOG_TAIL_END = LOG_TAIL + LOG_TAIL_SIZE;
 
 static void log_tail_append(const char *msg) {
     char tmp[1000];
