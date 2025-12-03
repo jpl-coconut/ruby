@@ -1304,10 +1304,6 @@ deferred_wait_thread_worker(void *arg)
 #ifdef SET_CURRENT_THREAD_NAME
     SET_CURRENT_THREAD_NAME("rb_def_wait");
 #endif
-    usleep(1500000);
-    install_segv_handler();
-
-
     DUMP_LOG_REPORT("thread start: %lx\n", (unsigned long) &thread_deferred_wait.lock);
 
     rb_native_mutex_lock(&thread_deferred_wait.lock);
@@ -1386,6 +1382,8 @@ deferred_wait_thread_detach_sched(struct rb_thread_sched *sched)
 static bool
 deferred_wait_thread_enqueue_yield(struct rb_thread_sched *sched, rb_thread_t *th)
 {
+    install_segv_handler();
+
     if (!sched->is_running) {
         return false;
     }
