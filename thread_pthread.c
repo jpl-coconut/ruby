@@ -1439,8 +1439,8 @@ deferred_wait_thread_enqueue_yield(struct rb_thread_sched *sched, rb_thread_t *t
     sched->deferred_wait_th = th;
     sched->deferred_wait_seq1 += 1;
 
-    // Only link if we're not already linked.
-    if (!ccan_node_linked(&sched->deferred_wait_link)) {
+    // Only link if we're not already linked and the background thread is running.
+    if (!ccan_node_linked(&sched->deferred_wait_link) && thread_deferred_wait.running) {
         rb_native_mutex_lock(&thread_deferred_wait.lock);
         // We held the sched lock while waiting for the mutex so we should not have been unlinked.
         VM_ASSERT(!ccan_node_linked(&sched->deferred_wait_link));
