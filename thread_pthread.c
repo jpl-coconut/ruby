@@ -152,6 +152,12 @@ static void log_tail_dump() {
     }
 }
 
+#define DUMP_LOG_REPORT(...)                        \
+    {char tmp[1000];                        \
+    sprintf(tmp, __VA_ARGS__);                        \
+    log_tail_append(tmp); \
+}
+
 static struct sigaction old_sa;
 static void tail_segv_handler(int signum, siginfo_t *info, void *context) {
     DUMP_LOG_REPORT("SEGV: dumping");
@@ -178,12 +184,6 @@ static void install_segv_handler() {
     installed = true;
 }
 
-
-#define DUMP_LOG_REPORT(...)                        \
-    {char tmp[1000];                        \
-    sprintf(tmp, __VA_ARGS__);                        \
-    log_tail_append(tmp); \
-}
 
 // native thread wrappers
 
