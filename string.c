@@ -10695,7 +10695,7 @@ rb_str_oct(VALUE str)
 
 static struct {
     rb_nativethread_lock_t lock;
-} crypt_mutex = {PTHREAD_MUTEX_INITIALIZER};
+} crypt_mutex = {RB_NATIVETHREAD_LOCK_INIT};
 #endif
 
 /*

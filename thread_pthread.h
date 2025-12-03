@@ -14,9 +14,6 @@
 #include <pthread_np.h>
 #endif
 
-#define RB_NATIVETHREAD_LOCK_INIT PTHREAD_MUTEX_INITIALIZER
-#define RB_NATIVETHREAD_COND_INIT PTHREAD_COND_INITIALIZER
-
 // TLS can not be accessed across .so on arm64 and perhaps ppc64le too.
 #if defined(__arm64__) || defined(__aarch64__) || defined(__powerpc64__)
 # define RB_THREAD_CURRENT_EC_NOINLINE

@@ -141,7 +141,7 @@ static void log_tail_append(const char *msg) {
     LOG_TAIL_HEAD += s_remaining;
 }
 
-static void log_tail_dump() {
+static void log_tail_dump(void) {
     if (write_tail) {
         LOG_TAIL[LOG_TAIL_SIZE] = 0;
         fprintf(stderr, "%s", LOG_TAIL_HEAD);
@@ -158,15 +158,21 @@ static void log_tail_dump() {
     log_tail_append(tmp); \
 }
 
+static struct sigaction old_sv;
 static struct sigaction old_sa;
 static void tail_segv_handler(int signum, siginfo_t *info, void *context) {
-    DUMP_LOG_REPORT("SEGV: dumping");
+    DUMP_LOG_REPORT("SIGNAL %d: dumping", signum);
     log_tail_dump();
-    sigaction(SIGSEGV, &old_sa, NULL);
-    raise(SIGSEGV);
+    if (signum == 11) {
+        sigaction(signum, &old_sv, NULL);
+    } else {
+        sigaction(signum, &old_sa, NULL);
+    }
+
+    raise(signum);
 }
 
-static void install_segv_handler() {
+static void install_segv_handler(void) {
     static bool installed = false;
     if (installed) {
         return;
@@ -178,7 +184,10 @@ static void install_segv_handler() {
     memset(&sa, 0, sizeof(sa));
     sa.sa_sigaction = tail_segv_handler;
     sa.sa_flags = SA_SIGINFO; // Use sa_sigaction for handler, provides more info
-    if (sigaction(SIGSEGV, &sa, &old_sa) == -1) {
+    if (sigaction(SIGSEGV, &sa, &old_sv) == -1) {
+        abort();
+    }
+    if (sigaction(SIGABRT, &sa, &old_sa) == -1) {
         abort();
     }
     installed = true;
@@ -193,52 +202,64 @@ static void install_segv_handler() {
 static void
 mutex_debug(const char *msg, void *lock)
 {
-    if (NATIVE_MUTEX_LOCK_DEBUG) {
-        int r;
-        static pthread_mutex_t dbglock = PTHREAD_MUTEX_INITIALIZER;
-
-        if ((r = pthread_mutex_lock(&dbglock)) != 0) {exit(EXIT_FAILURE);}
-        fprintf(stdout, "%s: %p\n", msg, lock);
-        if ((r = pthread_mutex_unlock(&dbglock)) != 0) {exit(EXIT_FAILURE);}
-    }
+    //if (NATIVE_MUTEX_LOCK_DEBUG) {
+    //    int r;
+    //    static rb_nativethread_lock_t dbglock = PTHREAD_MUTEX_INITIALIZER;
+//
+    //    if ((r = pthread_mutex_lock(&dbglock)) != 0) {exit(EXIT_FAILURE);}
+    //    fprintf(stdout, "%s: %p\n", msg, lock);
+    //    if ((r = pthread_mutex_unlock(&dbglock)) != 0) {exit(EXIT_FAILURE);}
+    //}
 }
 
 void
-rb_native_mutex_lock(pthread_mutex_t *lock)
+rb_native_mutex_lock(rb_nativethread_lock_t *lock)
 {
     DUMP_LOG_REPORT("mutex_lock/enter: %lx\n", (unsigned long) lock);
+
+    VM_ASSERT(lock->owner_id != pthread_self());
+    VM_ASSERT(lock->state == MUTEX_INIT_COOKIE);
 
     int r;
 #if NATIVE_MUTEX_LOCK_DEBUG_YIELD
     native_thread_yield();
 #endif
     mutex_debug("lock", lock);
-    if ((r = pthread_mutex_lock(lock)) != 0) {
+    if ((r = pthread_mutex_lock(&lock->m)) != 0) {
         rb_bug_errno("pthread_mutex_lock", r);
     }
-    DUMP_LOG_REPORT("mutex_lock/exit: %lx\n", (unsigned long) lock);
+    DUMP_LOG_REPORT("mutex_lock/success: %lx\n", (unsigned long) lock);
+
+    VM_ASSERT(lock->owner_id == 0);
+    VM_ASSERT(lock->state == MUTEX_INIT_COOKIE);
+    lock->owner_id = pthread_self();
 }
 
 void
-rb_native_mutex_unlock(pthread_mutex_t *lock)
+rb_native_mutex_unlock(rb_nativethread_lock_t *lock)
 {
     DUMP_LOG_REPORT("mutex_unlock: %lx\n", (unsigned long) lock);
 
+    VM_ASSERT(lock->owner_id == pthread_self());
+    VM_ASSERT(lock->state == MUTEX_INIT_COOKIE);
+    lock->owner_id = 0;
+
     int r;
     mutex_debug("unlock", lock);
-    if ((r = pthread_mutex_unlock(lock)) != 0) {
+    if ((r = pthread_mutex_unlock(&lock->m)) != 0) {
         rb_bug_errno("pthread_mutex_unlock", r);
     }
 }
 
 int
-rb_native_mutex_trylock(pthread_mutex_t *lock)
+rb_native_mutex_trylock(rb_nativethread_lock_t *lock)
 {
     DUMP_LOG_REPORT("mutex_trylock/enter: %lx\n", (unsigned long) lock);
+    VM_ASSERT(lock->state == MUTEX_INIT_COOKIE);
 
     int r;
     mutex_debug("trylock", lock);
-    if ((r = pthread_mutex_trylock(lock)) != 0) {
+    if ((r = pthread_mutex_trylock(&lock->m)) != 0) {
         if (r == EBUSY) {
 
             DUMP_LOG_REPORT("mutex_trylock_fail: %lx\n", (unsigned long) lock);
@@ -250,28 +271,39 @@ rb_native_mutex_trylock(pthread_mutex_t *lock)
     }
 
     DUMP_LOG_REPORT("mutex_trylock_success: %lx\n", (unsigned long) lock);
+
+    VM_ASSERT(lock->owner_id == 0);
+    VM_ASSERT(lock->state == MUTEX_INIT_COOKIE);
+    lock->owner_id = pthread_self();
+
     return 0;
 }
 
 void
-rb_native_mutex_initialize(pthread_mutex_t *lock)
+rb_native_mutex_initialize(rb_nativethread_lock_t *lock)
 {
     DUMP_LOG_REPORT("mutex_init: %lx\n", (unsigned long) lock);
 
-    int r = pthread_mutex_init(lock, 0);
+    int r = pthread_mutex_init(&lock->m, 0);
     mutex_debug("init", lock);
     if (r != 0) {
         rb_bug_errno("pthread_mutex_init", r);
     }
+
+    lock->state = MUTEX_INIT_COOKIE;
+    lock->owner_id = 0;
 }
 
 void
-rb_native_mutex_destroy(pthread_mutex_t *lock)
+rb_native_mutex_destroy(rb_nativethread_lock_t *lock)
 {
-
     DUMP_LOG_REPORT("mutex_destroy: %lx\n", (unsigned long) lock);
 
-    int r = pthread_mutex_destroy(lock);
+    VM_ASSERT(lock->state == MUTEX_INIT_COOKIE);
+    VM_ASSERT(lock->owner_id == 0);
+    lock->state = MUTEX_DESTROY_COOKIE;
+
+    int r = pthread_mutex_destroy(&lock->m);
     mutex_debug("destroy", lock);
     if (r != 0) {
         rb_bug_errno("pthread_mutex_destroy", r);
@@ -339,25 +371,36 @@ rb_native_cond_broadcast(rb_nativethread_cond_t *cond)
 }
 
 void
-rb_native_cond_wait(rb_nativethread_cond_t *cond, pthread_mutex_t *mutex)
+rb_native_cond_wait(rb_nativethread_cond_t *cond, rb_nativethread_lock_t *mutex)
 {
     DUMP_LOG_REPORT("cond_wait/begin  cond: %lx   lock: %lx\n", (unsigned long) cond, (unsigned long) mutex);
 
-    int r = pthread_cond_wait(cond, mutex);
+    VM_ASSERT(mutex->state == MUTEX_INIT_COOKIE);
+    VM_ASSERT(mutex->owner_id == pthread_self());
+    mutex->owner_id = 0;
+
+    int r = pthread_cond_wait(cond, &mutex->m);
     if (r != 0) {
         rb_bug_errno("pthread_cond_wait", r);
     }
+
+    VM_ASSERT(mutex->owner_id == 0);
+    mutex->owner_id = pthread_self();
 
     // Implicit lock acquisition here
     DUMP_LOG_REPORT("cond_wait/awake  cond: %lx   (aq) lock: %lx\n", (unsigned long) cond, (unsigned long) mutex);
 }
 
 static int
-native_cond_timedwait(rb_nativethread_cond_t *cond, pthread_mutex_t *mutex, const rb_hrtime_t *abs)
+native_cond_timedwait(rb_nativethread_cond_t *cond, rb_nativethread_lock_t *mutex, const rb_hrtime_t *abs)
 {
     int r;
     struct timespec ts;
     DUMP_LOG_REPORT("cond_timedwait/begin  cond: %lx   lock: %lx\n", (unsigned long) cond, (unsigned long) mutex);
+
+    VM_ASSERT(mutex->state == MUTEX_INIT_COOKIE);
+    VM_ASSERT(mutex->owner_id == pthread_self());
+    mutex->owner_id = 0;
 
     /*
      * An old Linux may return EINTR. Even though POSIX says
@@ -367,7 +410,7 @@ native_cond_timedwait(rb_nativethread_cond_t *cond, pthread_mutex_t *mutex, cons
      */
     do {
         rb_hrtime2timespec(&ts, abs);
-        r = pthread_cond_timedwait(cond, mutex, &ts);
+        r = pthread_cond_timedwait(cond, &mutex->m, &ts);
     } while (r == EINTR);
 
     if (r != 0 && r != ETIMEDOUT) {
@@ -376,6 +419,8 @@ native_cond_timedwait(rb_nativethread_cond_t *cond, pthread_mutex_t *mutex, cons
 
     // Implicit lock acquisition here
     DUMP_LOG_REPORT("cond_timedwait/awake  cond: %lx   (aq) lock: %lx\n", (unsigned long) cond, (unsigned long) mutex);
+    VM_ASSERT(mutex->owner_id == 0);
+    mutex->owner_id = pthread_self();
     return r;
 }
 
@@ -394,7 +439,7 @@ native_cond_timeout(rb_nativethread_cond_t *cond, const rb_hrtime_t rel)
 }
 
 void
-rb_native_cond_timedwait(rb_nativethread_cond_t *cond, pthread_mutex_t *mutex, unsigned long msec)
+rb_native_cond_timedwait(rb_nativethread_cond_t *cond, rb_nativethread_lock_t *mutex, unsigned long msec)
 {
     rb_hrtime_t hrmsec = native_cond_timeout(cond, RB_HRTIME_PER_MSEC * msec);
     native_cond_timedwait(cond, mutex, &hrmsec);
@@ -3217,7 +3262,7 @@ static struct {
 
     // waiting threads list
     struct ccan_list_head waiting; // waiting threads in ractors
-    pthread_mutex_t waiting_lock;
+    rb_nativethread_lock_t waiting_lock;
 } timer_th = {
     .created_fork_gen = 0,
 };

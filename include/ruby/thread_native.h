@@ -39,8 +39,20 @@ typedef struct rb_thread_cond_struct rb_nativethread_cond_t;
 
 #include <pthread.h>
 typedef pthread_t rb_nativethread_id_t;
-typedef pthread_mutex_t rb_nativethread_lock_t;
+typedef struct {
+    pthread_mutex_t m;
+    long state;
+    pthread_t owner_id;
+} rb_nativethread_lock_t;
 typedef pthread_cond_t rb_nativethread_cond_t;
+
+#ifndef MUTEX_INIT_COOKIE
+#define MUTEX_INIT_COOKIE 0x8800771166225533
+#define MUTEX_DESTROY_COOKIE 0x0011002200330044
+
+#define RB_NATIVETHREAD_LOCK_INIT {PTHREAD_MUTEX_INITIALIZER,MUTEX_INIT_COOKIE,0}
+#define RB_NATIVETHREAD_COND_INIT PTHREAD_COND_INITIALIZER
+#endif
 
 #elif defined(__wasi__) // no-thread platforms
 
