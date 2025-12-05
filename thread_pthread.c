@@ -1289,6 +1289,8 @@ deferred_wait_thread_enqueue_yield(struct rb_thread_sched *sched, rb_thread_t *t
         ccan_list_add(&thread_deferred_wait.q_head, &sched->deferred_wait_link);
         rb_native_cond_signal(&thread_deferred_wait.cond);
         rb_native_mutex_unlock(&thread_deferred_wait.lock);
+        // Mark the thread as stopped even though it's not really stopped.
+        th->status = THREAD_STOPPED_FOREVER;
     }
     return true;
 }
@@ -1319,6 +1321,7 @@ thread_sched_blocking_region_exit(struct rb_thread_sched *sched, rb_thread_t *th
     thread_sched_lock(sched, th);
     if (sched->running == th && th == sched->deferred_wait_th) {
         // We never descheduled the thread. Cancel that request now.
+        th->status = THREAD_RUNNABLE;
         deferred_wait_thread_cancel_yield(sched);
     }
     else {
