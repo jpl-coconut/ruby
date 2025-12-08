@@ -1275,6 +1275,8 @@ deferred_wait_thread_enqueue_yield(struct rb_thread_sched *sched, rb_thread_t *t
 
     sched->deferred_wait_th = th;
     sched->deferred_wait_seq1 += 1;
+    // Mark the thread as stopped even though it's not really stopped.
+    th->status = THREAD_STOPPED_FOREVER;
 
     // Only link if we're not already linked and the background thread is running.
     if (!ccan_node_linked(&sched->deferred_wait_link) && thread_deferred_wait.running) {
@@ -1289,8 +1291,6 @@ deferred_wait_thread_enqueue_yield(struct rb_thread_sched *sched, rb_thread_t *t
         ccan_list_add(&thread_deferred_wait.q_head, &sched->deferred_wait_link);
         rb_native_cond_signal(&thread_deferred_wait.cond);
         rb_native_mutex_unlock(&thread_deferred_wait.lock);
-        // Mark the thread as stopped even though it's not really stopped.
-        th->status = THREAD_STOPPED_FOREVER;
     }
     return true;
 }
