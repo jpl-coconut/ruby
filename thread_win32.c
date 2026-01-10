@@ -135,7 +135,7 @@ thread_sched_to_running(struct rb_thread_sched *sched, rb_thread_t *th)
 #define thread_sched_to_dead thread_sched_to_waiting
 
 static void
-thread_sched_to_waiting(struct rb_thread_sched *sched, rb_thread_t *th)
+thread_sched_to_waiting(struct rb_thread_sched *sched, rb_thread_t *th, bool yield_immediately)
 {
     ReleaseMutex(sched->lock);
 }
@@ -143,7 +143,7 @@ thread_sched_to_waiting(struct rb_thread_sched *sched, rb_thread_t *th)
 static void
 thread_sched_yield(struct rb_thread_sched *sched, rb_thread_t *th)
 {
-    thread_sched_to_waiting(sched, th);
+    thread_sched_to_waiting(sched, th, true);
     native_thread_yield();
     thread_sched_to_running(sched, th);
 }
