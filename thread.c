@@ -5652,6 +5652,57 @@ Init_Thread_Mutex(void)
     rb_native_mutex_initialize(&th->interrupt_lock);
 }
 
+static void *
+blocking_usleep(void *data)
+{
+    unsigned int *usec = (unsigned int *)data;
+    struct timespec req;
+    memset(&req, 0, sizeof(req));
+    req.tv_nsec = *usec;
+    req.tv_nsec *= 1000;
+    struct timespec rem;
+    while (nanosleep(&req, &rem) == -1 && errno == EINTR) {
+        req = rem;
+    }
+    return NULL;
+}
+
+static void *
+blocking_spin(void *data) {
+    unsigned int *usec = (unsigned int *)data;
+    struct timespec start, now;
+    
+    // Get the starting time
+    clock_gettime(CLOCK_MONOTONIC, &start);
+    
+    // Calculate the target end time in nanoseconds
+    long long target_ns = (long long)*usec * 1000;
+    long long elapsed_ns = 0;
+
+    while (elapsed_ns < target_ns) {
+        clock_gettime(CLOCK_MONOTONIC, &now);
+        elapsed_ns = (now.tv_sec - start.tv_sec) * 1000000000LL + 
+                     (now.tv_nsec - start.tv_nsec);
+    }
+    return NULL;
+}
+
+static VALUE
+rb_thread_singleton_sleep_usec(VALUE self, VALUE useconds_val)
+{
+    unsigned int usec = (unsigned int)NUM2UINT(useconds_val);
+    rb_thread_call_without_gvl(blocking_usleep, &usec, RUBY_UBF_PROCESS, NULL);
+    return Qnil;
+}
+
+static VALUE
+rb_thread_singleton_spin_usec(VALUE self, VALUE useconds_val)
+{
+    unsigned int usec = (unsigned int)NUM2UINT(useconds_val);
+    rb_thread_call_without_gvl(blocking_spin, &usec, RUBY_UBF_PROCESS, NULL);
+    return Qnil;
+}
+
 /*
  *  Document-class: ThreadError
  *
@@ -5694,6 +5745,8 @@ Init_Thread(void)
     rb_define_singleton_method(rb_cThread, "ignore_deadlock=", rb_thread_s_ignore_deadlock_set, 1);
     rb_define_singleton_method(rb_cThread, "handle_interrupt", rb_thread_s_handle_interrupt, 1);
     rb_define_singleton_method(rb_cThread, "pending_interrupt?", rb_thread_s_pending_interrupt_p, -1);
+    rb_define_singleton_method(rb_cThread, "sleep_usec", rb_thread_singleton_sleep_usec, 1);
+    rb_define_singleton_method(rb_cThread, "spin_usec", rb_thread_singleton_spin_usec, 1);
     rb_define_method(rb_cThread, "pending_interrupt?", rb_thread_pending_interrupt_p, -1);
 
     rb_define_method(rb_cThread, "initialize", thread_initialize, -2);
